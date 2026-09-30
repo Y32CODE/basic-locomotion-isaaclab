@@ -20,19 +20,37 @@ sys.path.append(str(dir_path / ".."))
 ros_ws = dir_path / "ros2_ws"
 setup_bash = ros_ws / "install" / "setup.bash"
 
+dls2_python = (
+    ros_ws
+    / "install"
+    / "dls2_interface"
+    / "lib"
+    / "python3.11"
+    / "site-packages"
+)
+
+dls2_lib = ros_ws / "install" / "dls2_interface" / "lib"
+
+sys.path.insert(0, str(dls2_python))
+
+os.environ["LD_LIBRARY_PATH"] = (
+    str(dls2_lib)
+    + ":"
+    + os.environ.get("LD_LIBRARY_PATH", "")
+)
 if not setup_bash.exists():
     print("Building the msgs first...")
     subprocess.run(["colcon", "build"], cwd=ros_ws, check=True)
 
-if os.environ.get("BASIC_LOCOMOTION_ROS2_SOURCED") != "1":
-    print("Sourcing ROS2 workspace and restarting script...")
-    cmd = (
-        f"source {shlex.quote(str(setup_bash))} && "
-        "export BASIC_LOCOMOTION_ROS2_SOURCED=1 && "
-        f"exec {shlex.quote(sys.executable)} "
-        + " ".join(shlex.quote(arg) for arg in [str(Path(__file__).resolve()), *sys.argv[1:]])
-    )
-    os.execv("/bin/bash", ["bash", "-c", cmd])
+# if os.environ.get("BASIC_LOCOMOTION_ROS2_SOURCED") != "1":
+#     print("Sourcing ROS2 workspace and restarting script...")
+#     cmd = (
+#         f"source {shlex.quote(str(setup_bash))} && "
+#         "export BASIC_LOCOMOTION_ROS2_SOURCED=1 && "
+#         f"exec {shlex.quote(sys.executable)} "
+#         + " ".join(shlex.quote(arg) for arg in [str(Path(__file__).resolve()), *sys.argv[1:]])
+#     )
+#     os.execv("/bin/bash", ["bash", "-c", cmd])
 
 
 # ROS 2 imports
@@ -97,6 +115,13 @@ class ControllerROS2(Node):
                 show_right_ui=False,
             )
             mujoco.mjv_defaultFreeCamera(self.mjModel, self.viewer.cam)
+        
+        
+        self.rl_transitioned = False
+        self.rl_transitioning = False
+        self.rl_transition_duration = 2.0
+        self.rl_transition_start = False
+        self.rl_transition_t = 0.0
                  
 
         # Subscribers and Publishers
@@ -348,10 +373,16 @@ class ControllerROS2(Node):
             ).reshape(self.heightmap.sensor_data_matrix.shape)
             heightmap_data = self.heightmap.data
 
+        if self.console.isDown:
+            self.rl_transitioned = False
 
         if(self.console.isRLActivated):
 
-            desired_joint_pos = locomotion_policy.compute_control(
+            if self.console.isDown:
+                print("YOU ARE DOWN!!!!!")
+                return
+            
+            policy_joint_pos = locomotion_policy.compute_control(
                         base_pos=base_pos, 
                         base_ori_euler_xyz=base_ori_euler_xyz, 
                         base_quat_wxyz=base_quat_wxyz,
@@ -366,10 +397,57 @@ class ControllerROS2(Node):
                         imu_angular_velocity=self.imu_angular_velocity,
                         imu_orientation=self.imu_orientation,
                         heightmap_data=heightmap_data)
+            if not self.rl_transitioned and not self.rl_transitioning:
+
+                self.rl_transitioning = True
+                self.rl_transition_t = 0.0
+                self.rl_transition_start = copy.deepcopy(joints_pos_leg)
+
+            if self.rl_transitioning:
+
+                self.rl_transition_t += simulation_dt / self.rl_transition_duration
+                self.rl_transition_t = min(self.rl_transition_t, 1.0)
+
+                t = self.rl_transition_t
+
+                # desired_joint_pos = LegsAttr(
+                #     *[np.zeros_like(joints_pos_leg.FL) for _ in range(4)]
+                # )
+                desired_joint_pos = self.rl_transition_start + (policy_joint_pos - self.rl_transition_start) * t
+
+
+                # desired_joint_pos.FL = (
+                #     self.rl_transition_start.FL
+                #     + (policy_joint_pos.FL - self.rl_transition_start.FL) * t
+                # )
+
+                # desired_joint_pos.FR = (
+                #     self.rl_transition_start.FR
+                #     + (policy_joint_pos.FR - self.rl_transition_start.FR) * t
+                # )
+
+                # desired_joint_pos.RL = (
+                #     self.rl_transition_start.RL
+                #     + (policy_joint_pos.RL - self.rl_transition_start.RL) * t
+                # )
+
+                # desired_joint_pos.RR = (
+                #     self.rl_transition_start.RR
+                #     + (policy_joint_pos.RR - self.rl_transition_start.RR) * t
+                # )
+
+                if t >= 1.0:
+                    self.rl_transitioning = False
+                    self.rl_transitioned = True
+            else:
+                desired_joint_pos = policy_joint_pos
             
-            # Impedence Loop
             Kp = locomotion_policy.Kp_walking
             Kd = locomotion_policy.Kd_walking
+
+
+            
+            # Impedence Loop
 
         else:
             desired_joint_pos = self.desired_joint_pos_leg

@@ -4,8 +4,8 @@ dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path+"/../")
 sys.path.append(dir_path+"/../scripts/rsl_rl")
 
-robot = 'go2'  # 'aliengo', 'go2', 'b2', 'hyqreal2' 
-scene = 'random_boxes'  # flat, random_boxes, random_pyramids, perlin
+robot = 'aliengo'  # 'aliengo', 'go2', 'b2', 'hyqreal2' 
+scene = 'flat'  # flat, random_boxes, random_pyramids, perlin
 
 # ----------------------------------------------------------------------------------------------------------------
 if(robot == "aliengo"):

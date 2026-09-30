@@ -66,9 +66,9 @@ ALIENGO_THIGH_ACTUATOR_CFG = IdentifiedActuatorElectricCfg(
 
 ALIENGO_CALF_ACTUATOR_CFG = IdentifiedActuatorElectricCfg(
     joint_names_expr=[".*_calf_joint"],
-    effort_limit=44.4,
+    effort_limit=10.4,
     velocity_limit=21.0,
-    saturation_effort=44.4,
+    saturation_effort=10.4,
     stiffness=stiffness_mujoco,
     damping=damping_mujoco,
     armature=armature_mujoco,

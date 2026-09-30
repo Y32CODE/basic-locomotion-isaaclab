@@ -1,0 +1,1696 @@
+--- git status ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add/rm <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   deploy/config.py
+	modified:   deploy/installation/mamba_environment_humble.yaml
+	modified:   deploy/ros2_localhost_connect.sh
+	modified:   deploy/run_controller_ros2.py
+	modified:   deploy/run_simulator_ros2.py
+	modified:   source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/aliengo_asset.py
+	modified:   source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset.py
+	modified:   source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/tasks/locomotion/aliengo_env_cfg.py
+	deleted:    tested_policies/go2/concurrent_symm/events.out.tfevents.1784060823.gturrisi.1374477.0
+	deleted:    tested_policies/go2/concurrent_symm/exported/concurrent_state_estimator.pth
+	modified:   tested_policies/go2/concurrent_symm/exported/policy.onnx
+	modified:   tested_policies/go2/concurrent_symm/exported/policy.pt
+	deleted:    tested_policies/go2/concurrent_symm/model_7950.pt
+	deleted:    tested_policies/go2/concurrent_symm/model_7999.pt
+	modified:   tested_policies/go2/concurrent_symm/params/agent.yaml
+	modified:   tested_policies/go2/concurrent_symm/params/env.yaml
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	deploy/ros2_ws/src/dls2_interface/msg/ControlSignal.msg
+	deploy/run_controller_ros2_original.py
+	deploy/run_controller_ros2real.py
+	deploy/run_controller_thing.py
+	scripts/rsl_rl/concurrent_state_estimator.pth
+	source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset copy.py
+	tested_policies/aliengo/
+	tested_policies/go2/concurrent_symm/copy/
+	tested_policies/go2/concurrent_symm/events.out.tfevents.1788271766.yazn-u24.4302.0
+	tested_policies/go2/concurrent_symm/git/
+	yes
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/deploy/config.py b/deploy/config.py
+index 30fa0ef..3080306 100644
+--- a/deploy/config.py
++++ b/deploy/config.py
+@@ -4,8 +4,8 @@ dir_path = os.path.dirname(os.path.realpath(__file__))
+ sys.path.append(dir_path+"/../")
+ sys.path.append(dir_path+"/../scripts/rsl_rl")
+ 
+-robot = 'go2'  # 'aliengo', 'go2', 'b2', 'hyqreal2' 
+-scene = 'random_boxes'  # flat, random_boxes, random_pyramids, perlin
++robot = 'aliengo'  # 'aliengo', 'go2', 'b2', 'hyqreal2' 
++scene = 'flat'  # flat, random_boxes, random_pyramids, perlin
+ 
+ # ----------------------------------------------------------------------------------------------------------------
+ if(robot == "aliengo"):
+diff --git a/deploy/installation/mamba_environment_humble.yaml b/deploy/installation/mamba_environment_humble.yaml
+index ef82046..5f19f1e 100644
+--- a/deploy/installation/mamba_environment_humble.yaml
++++ b/deploy/installation/mamba_environment_humble.yaml
+@@ -9,7 +9,7 @@ channels:
+ - robostack-staging
+ dependencies:
+ - pip
+-- python
++- python=3.11
+ - numpy
+ - cuda-nvcc 
+ - ros-humble-desktop
+@@ -33,4 +33,4 @@ dependencies:
+   - readchar
+   - onnxruntime
+   - torch
+-  - gym-quadruped
+\ No newline at end of file
++  - gym-quadruped
+diff --git a/deploy/ros2_localhost_connect.sh b/deploy/ros2_localhost_connect.sh
+index d3dff16..3862bde 100755
+--- a/deploy/ros2_localhost_connect.sh
++++ b/deploy/ros2_localhost_connect.sh
+@@ -9,4 +9,4 @@ unset ROS_DISCOVERY_SERVER
+ unset ROS_SUPER_CLIENT
+ ros2 daemon stop &&
+ ros2 daemon start
+-echo "ROS2 configured to use localhost only."
+\ No newline at end of file
++echo "ROS2 configured to use localhost only."
+diff --git a/deploy/run_controller_ros2.py b/deploy/run_controller_ros2.py
+index 246b277..d17adcc 100644
+--- a/deploy/run_controller_ros2.py
++++ b/deploy/run_controller_ros2.py
+@@ -1,5 +1,6 @@
+ import os
+ 
++
+ # Fail-safe: se non è stato scelto esplicitamente altro,
+ # ROS 2 comunica solamente sulla macchina locale.
+ os.environ.setdefault("ROS_LOCALHOST_ONLY", "1")
+@@ -14,9 +15,11 @@ import shlex
+ import subprocess
+ from pathlib import Path
+ 
++# gets path of directory of file and the directory before it
+ dir_path = Path(__file__).resolve().parent
+ sys.path.append(str(dir_path / ".."))
+ 
++
+ ros_ws = dir_path / "ros2_ws"
+ setup_bash = ros_ws / "install" / "setup.bash"
+ 
+@@ -70,7 +73,7 @@ os.system("echo -20 > /proc/" + str(pid) + "/autogroup")
+ #for real time, launch it with chrt -r 99 python3 run_controller.py
+ 
+ 
+-USE_MUJOCO_RENDER = True
++USE_MUJOCO_RENDER = False
+ 
+ 
+ class ControllerROS2(Node):
+@@ -90,8 +93,16 @@ class ControllerROS2(Node):
+             sim_dt=simulation_dt,
+             base_vel_command_type="human",  # "forward", "random", "forward+rotate", "human"
+         )
++        # resets sim to initial state and random makes it not randomize starting conditions
+         self.env.reset(random=False)
+         
++        self.rl_transitioned = False
++        self.rl_transitioning = False
++        self.rl_transition_duration = 2.0
++        self.rl_transition_start = False
++        self.rl_transition_t = 0.0
++        
++
+         self.last_render_time = time.time()
+         if USE_MUJOCO_RENDER:
+             self.env.render()   
+@@ -104,6 +115,8 @@ class ControllerROS2(Node):
+         
+         self.subscription_joy = self.create_subscription(Joy,"joy", self.get_joy_callback, 1)
+         self.last_joy_time = None
++        self.last_start_time = None
++        self.loop_time = 0.002
+         
+         self.publisher_trajectory_generator = self.create_publisher(TrajectoryGenerator,"/trajectory_generator", 1)
+         self.sequence_id = 0 # To keep track of the last msg sent, useful for debugging and synchronization
+@@ -117,9 +130,6 @@ class ControllerROS2(Node):
+         self.first_message_imu_arrived = False
+         self.first_message_heightmap_arrived = False
+ 
+-        # Timing stuff
+-        self.loop_time = 0.002
+-        self.last_start_time = None
+ 
+         # Base State
+         self.position = np.zeros(3)
+@@ -355,25 +365,76 @@ class ControllerROS2(Node):
+             heightmap_data = self.heightmap.data
+ 
+ 
+-        if(self.console.isRLActivated):
+-
+-            desired_joint_pos = locomotion_policy.compute_control(
+-                        base_pos=base_pos, 
+-                        base_ori_euler_xyz=base_ori_euler_xyz, 
+-                        base_quat_wxyz=base_quat_wxyz,
+-                        base_lin_vel=base_lin_vel, 
+-                        base_ang_vel=base_ang_vel,
+-                        heading_orientation_SO3=heading_orientation_SO3,
+-                        joints_pos=joints_pos, 
+-                        joints_vel=joints_vel,
+-                        ref_base_lin_vel=ref_base_lin_vel, 
+-                        ref_base_ang_vel=ref_base_ang_vel,
+-                        imu_linear_acceleration=self.imu_linear_acceleration,
+-                        imu_angular_velocity=self.imu_angular_velocity,
+-                        imu_orientation=self.imu_orientation,
+-                        heightmap_data=heightmap_data)
+-            
+-            # Impedence Loop
++        if self.console.isRLActivated:
++
++            if self.console.isDown:
++                print("YOU ARE DOWN YOU WILL KILL THE ROBOT")
++                return
++
++            # Calculate the current RL target
++            policy_joint_pos = locomotion_policy.compute_control(
++                base_pos=base_pos,
++                base_ori_euler_xyz=base_ori_euler_xyz,
++                base_quat_wxyz=base_quat_wxyz,
++                base_lin_vel=base_lin_vel,
++                base_ang_vel=base_ang_vel,
++                heading_orientation_SO3=heading_orientation_SO3,
++                joints_pos=joints_pos,
++                joints_vel=joints_vel,
++                ref_base_lin_vel=ref_base_lin_vel,
++                ref_base_ang_vel=ref_base_ang_vel,
++                imu_linear_acceleration=self.imu_linear_acceleration,
++                imu_angular_velocity=self.imu_angular_velocity,
++                imu_orientation=self.imu_orientation,
++                heightmap_data=heightmap_data
++            )
++
++            # First frame after activating RL
++            if not self.rl_transitioned and not self.rl_transitioning:
++
++                self.rl_transitioning = True
++                self.rl_transition_t = 0.0
++                self.rl_transition_start = copy.deepcopy(joints_pos)
++
++            if self.rl_transitioning:
++
++                self.rl_transition_t += simulation_dt / self.rl_transition_duration
++                self.rl_transition_t = min(self.rl_transition_t, 1.0)
++
++                t = self.rl_transition_t
++
++                desired_joint_pos = LegsAttr(
++                    *[np.zeros_like(joints_pos.FL) for _ in range(4)]
++                )
++
++                desired_joint_pos.FL = (
++                    self.rl_transition_start.FL
++                    + (policy_joint_pos.FL - self.rl_transition_start.FL) * t
++                )
++
++                desired_joint_pos.FR = (
++                    self.rl_transition_start.FR
++                    + (policy_joint_pos.FR - self.rl_transition_start.FR) * t
++                )
++
++                desired_joint_pos.RL = (
++                    self.rl_transition_start.RL
++                    + (policy_joint_pos.RL - self.rl_transition_start.RL) * t
++                )
++
++                desired_joint_pos.RR = (
++                    self.rl_transition_start.RR
++                    + (policy_joint_pos.RR - self.rl_transition_start.RR) * t
++                )
++
++                if t >= 1.0:
++                    self.rl_transitioning = False
++                    self.rl_transitioned = True
++
++            else:
++                desired_joint_pos = policy_joint_pos
++
++            # Impedance loop
+             Kp = locomotion_policy.Kp_walking
+             Kd = locomotion_policy.Kd_walking
+ 
+diff --git a/deploy/run_simulator_ros2.py b/deploy/run_simulator_ros2.py
+index 531d8a0..4bd0191 100644
+--- a/deploy/run_simulator_ros2.py
++++ b/deploy/run_simulator_ros2.py
+@@ -1,225 +1,239 @@
+-import os
+-
+-# Fail-safe: se non è stato scelto esplicitamente altro,
+-# ROS 2 comunica solamente sulla macchina locale.
+-os.environ.setdefault("ROS_LOCALHOST_ONLY", "1")
+-
+-print(
+-    "ROS 2 network mode:",
+-    "LOCALHOST" if os.environ["ROS_LOCALHOST_ONLY"] == "1" else "NETWORK",
+-)
+-
+-import sys
+-import shlex
+-import subprocess
+-from pathlib import Path
+-
+-dir_path = Path(__file__).resolve().parent
+-sys.path.append(str(dir_path / ".."))
+-
+-ros_ws = dir_path / "ros2_ws"
+-setup_bash = ros_ws / "install" / "setup.bash"
+-
+-if not setup_bash.exists():
+-    print("Building the msgs first...")
+-    subprocess.run(["colcon", "build"], cwd=ros_ws, check=True)
+-
+-if os.environ.get("BASIC_LOCOMOTION_ROS2_SOURCED") != "1":
+-    print("Sourcing ROS2 workspace and restarting script...")
+-    cmd = (
+-        f"source {shlex.quote(str(setup_bash))} && "
+-        "export BASIC_LOCOMOTION_ROS2_SOURCED=1 && "
+-        f"exec {shlex.quote(sys.executable)} "
+-        + " ".join(shlex.quote(arg) for arg in [str(Path(__file__).resolve()), *sys.argv[1:]])
++try:
++    import os
++
++    # Fail-safe: se non è stato scelto esplicitamente altro,
++    # ROS 2 comunica solamente sulla macchina locale.
++    os.environ.setdefault("ROS_LOCALHOST_ONLY", "1")
++
++    print(
++        "ROS 2 network mode:",
++        "LOCALHOST" if os.environ["ROS_LOCALHOST_ONLY"] == "1" else "NETWORK",
+     )
+-    os.execv("/bin/bash", ["bash", "-c", cmd])
+ 
++    import sys
++    import shlex
++    import subprocess
++    from pathlib import Path
++
++    dir_path = Path(__file__).resolve().parent
++    sys.path.append(str(dir_path / ".."))
+ 
+-import rclpy 
+-from rclpy.node import Node 
+-from dls2_interface.msg import BaseState, BlindState, Imu, TrajectoryGenerator
+-from unitree_go.msg import LowState, MotorState, IMUState
++    ros_ws = dir_path / "ros2_ws"
++    setup_bash = ros_ws / "install" / "setup.bash"
+ 
+-import time
+-import numpy as np
+-np.set_printoptions(precision=3, suppress=True)
++    if not setup_bash.exists():
++        print("Building the msgs first...")
++        subprocess.run(["colcon", "build"], cwd=ros_ws, check=True)
+ 
+-# Gym and Simulation related imports
+-import mujoco
+-from gym_quadruped.quadruped_env import QuadrupedEnv
+-from gym_quadruped.utils.quadruped_utils import LegsAttr
++    if os.environ.get("BASIC_LOCOMOTION_ROS2_SOURCED") != "1":
++        print("Sourcing ROS2 workspace and restarting script...")
++        cmd = (
++            f"source {shlex.quote(str(setup_bash))} && "
++            "export BASIC_LOCOMOTION_ROS2_SOURCED=1 && "
++            f"exec {shlex.quote(sys.executable)} "
++            + " ".join(shlex.quote(arg) for arg in [str(Path(__file__).resolve()), *sys.argv[1:]])
++        )
++        os.execv("/bin/bash", ["bash", "-c", cmd])
+ 
+-# Config imports
+-import config as cfg
+ 
++    import rclpy 
++    from rclpy.node import Node 
++    from dls2_interface.msg import BaseState, BlindState, Imu, TrajectoryGenerator
++    from unitree_go.msg import LowState, MotorState, IMUState
+ 
+-# Set the priority of the process
+-pid = os.getpid()
+-print("PID: ", pid)
+-os.system("renice -n -21 -p " + str(pid))
+-os.system("echo -20 > /proc/" + str(pid) + "/autogroup")
+-#for real time, launch it with chrt -r 99 python3 run_controller.py
++    import time
++    import numpy as np
++    np.set_printoptions(precision=3, suppress=True)
+ 
++    # Gym and Simulation related imports
++    import mujoco
++    from gym_quadruped.quadruped_env import QuadrupedEnv
++    from gym_quadruped.utils.quadruped_utils import LegsAttr
+ 
+-USE_SCHEDULER = True # Use the scheduler to compute the control signal
+-SCHEDULER_FREQ = 500 # Frequency of the scheduler
+-RENDER_FREQ = 30
++    # Config imports
++    import config as cfg
+ 
+-# Shell for the controllers ----------------------------------------------
+-class SimulatorROS2(Node):
+-    def __init__(self):
+-        super().__init__('SimulatorROS2')
+ 
+-        # Subscribers and Publishers
+-        self.publisher_base_state = self.create_publisher(BaseState,"base_state", 1)
+-        self.publisher_blind_state = self.create_publisher(BlindState,"blind_state", 1)
+-        self.publisher_imu = self.create_publisher(Imu,"imu", 1)
++    # Set the priority of the process
++    pid = os.getpid()
++    print("PID: ", pid)
++    os.system("renice -n -21 -p " + str(pid))
++    os.system("echo -20 > /proc/" + str(pid) + "/autogroup")
++    #for real time, launch it with chrt -r 99 python3 run_controller.py
+ 
+-        self.publisher_low_state = self.create_publisher(LowState,"lowstate", 1)
+ 
+-        self.subscriber_trajectory_generator = self.create_subscription(TrajectoryGenerator,"trajectory_generator", self.get_trajectory_generator_callback, 1)
++    USE_SCHEDULER = True # Use the scheduler to compute the control signal
++    SCHEDULER_FREQ = 500 # Frequency of the scheduler
++    RENDER_FREQ = 30
+ 
+-        self.timer = self.create_timer(1.0/SCHEDULER_FREQ, self.compute_simulator_step_callback)
++    print("yo")
++    createdpub = False
+ 
+-        # Timing stuff
+-        self.loop_time = 0.002
+-        self.last_start_time = None
+-        self.last_mpc_loop_time = 0.0
++    # Shell for the controllers ----------------------------------------------
++    class SimulatorROS2(Node):
++        def __init__(self):
++            super().__init__('SimulatorROS2')
+ 
++            # Subscribers and Publishers
++            self.publisher_base_state = self.create_publisher(BaseState,"/base_state", 1)
++            
++            self.publisher_blind_state = self.create_publisher(BlindState,"/blind_state", 1)
++            self.publisher_imu = self.create_publisher(Imu,"/imu", 1)
+ 
+-        # Mujoco env
+-        self.env = QuadrupedEnv(
+-            robot=cfg.robot,
+-            scene=cfg.scene,
+-            sim_dt=1.0/SCHEDULER_FREQ,
+-            base_vel_command_type="human"
+-        )
+-        self.env.reset(random=False)
+-        
+-
+-        self.last_render_time = time.time()
+-        self.env.render()  
+-        self.env.viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = False
+-        self.env.viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = False
+-
+-        # Desired PD 
+-        self.desired_joints_position = LegsAttr(*[np.zeros((int(self.env.mjModel.nu/4), 1)) for _ in range(4)])
+-        self.desired_joints_velocity = LegsAttr(*[np.zeros((int(self.env.mjModel.nu/4), 1)) for _ in range(4)])
+-
+-        # Desired gains
+-        self.Kp = 0
+-        self.Kd = 0
+-
+-
+-    def get_trajectory_generator_callback(self, msg):
+-
+-        joints_position = np.array(msg.joints_position)
+-
+-        self.desired_joints_position.FL = joints_position[0:3]
+-        self.desired_joints_position.FR = joints_position[3:6]
+-        self.desired_joints_position.RL = joints_position[6:9]
+-        self.desired_joints_position.RR = joints_position[9:12]
+-
+-        self.Kp = np.array(msg.kp)[0]
+-        self.Kd = np.array(msg.kd)[0]
+-        
+-
+-    def compute_simulator_step_callback(self):
+-
+-        qpos, qvel = self.env.mjData.qpos, self.env.mjData.qvel
+-        base_lin_vel = self.env.base_lin_vel(frame='world')
+-        base_ang_vel = self.env.base_ang_vel(frame='base')
+-        base_pos = self.env.base_pos
+-
+-        # Publish Base State ------------------------------------------------
+-        base_state_msg = BaseState()
+-        base_state_msg.pose.position = base_pos
+-        base_state_msg.pose.orientation = np.roll(self.env.mjData.qpos[3:7],-1)
+-        base_state_msg.velocity.linear = base_lin_vel
+-        base_state_msg.velocity.angular = base_ang_vel
+-        self.publisher_base_state.publish(base_state_msg)
+-
+-
+-        # Publish Blind State ------------------------------------------------
+-        blind_state_msg = BlindState()
+-        blind_state_msg.joints_position = self.env.mjData.qpos[7:].tolist()
+-        blind_state_msg.joints_velocity = self.env.mjData.qvel[6:].tolist()
+-        self.publisher_blind_state.publish(blind_state_msg)
+-
+-
+-        # Publish IMU ------------------------------------------------
+-        imu_msg = Imu()
+-        imu_msg.linear_acceleration = self.env.mjData.sensordata[0:3]
+-        imu_msg.angular_velocity = self.env.mjData.sensordata[3:6]
+-        # To be compliant with our hal, we expect the xyzw order, 
+-        # but mujoco gives us wxyz, so we roll the array to get the correct order
+-        imu_msg.orientation = np.roll(np.array(self.env.mjData.sensordata[9:13]), -1) 
+-        self.publisher_imu.publish(imu_msg)
+-
+-
+-        # Publish Low State of Unitree ------------------------------------------------
+-        # FR, FL, RR, RL convention to follow the unitree standard msgs
+-        lowstate_msg = LowState()
+-        for i in range(3):
+-            lowstate_msg.motor_state[i].q = self.env.mjData.qpos[self.env.legs_qpos_idx.FR[i]]
+-            lowstate_msg.motor_state[i].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.FR[i]]
+-        for i in range(3):
+-            lowstate_msg.motor_state[i+3].q = self.env.mjData.qpos[self.env.legs_qpos_idx.FL[i]]
+-            lowstate_msg.motor_state[i+3].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.FL[i]]
+-        for i in range(3):
+-            lowstate_msg.motor_state[i+6].q = self.env.mjData.qpos[self.env.legs_qpos_idx.RR[i]]
+-            lowstate_msg.motor_state[i+6].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.RR[i]]
+-        for i in range(3):
+-            lowstate_msg.motor_state[i+9].q = self.env.mjData.qpos[self.env.legs_qpos_idx.RL[i]]
+-            lowstate_msg.motor_state[i+9].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.RL[i]]
+-
+-        _, _, feet_GRF = self.env.feet_contact_state(ground_reaction_forces=True)
+-        lowstate_msg.foot_force = np.array([feet_GRF.FR[2], feet_GRF.FL[2], feet_GRF.RR[2], feet_GRF.RL[2]], dtype=np.int16)
+-        lowstate_msg.imu_state.accelerometer = self.env.mjData.sensordata[0:3].astype(np.float32)
+-        lowstate_msg.imu_state.gyroscope = self.env.mjData.sensordata[3:6].astype(np.float32)
+-        lowstate_msg.imu_state.quaternion = np.roll(np.array(self.env.mjData.sensordata[9:13].astype(np.float32)), -1)  
+-        self.publisher_low_state.publish(lowstate_msg)
+-
+-
+-        # Step the environment --------------------------------------------------------------------------------
+-        joints_pos = LegsAttr(*[np.zeros((1, int(self.env.mjModel.nu/4))) for _ in range(4)])
+-        joints_pos.FL = qpos[self.env.legs_qpos_idx.FL]
+-        joints_pos.FR = qpos[self.env.legs_qpos_idx.FR]
+-        joints_pos.RL = qpos[self.env.legs_qpos_idx.RL]
+-        joints_pos.RR = qpos[self.env.legs_qpos_idx.RR]
+-
+-
+-        joints_vel = LegsAttr(*[np.zeros((1, int(self.env.mjModel.nu/4))) for _ in range(4)])
+-        joints_vel.FL = qvel[self.env.legs_qvel_idx.FL]
+-        joints_vel.FR = qvel[self.env.legs_qvel_idx.FR]
+-        joints_vel.RL = qvel[self.env.legs_qvel_idx.RL]
+-        joints_vel.RR = qvel[self.env.legs_qvel_idx.RR]
+-
+-
+-        action = np.zeros(self.env.mjModel.nu)
+-        action[self.env.legs_tau_idx.FL] = self.Kp*(self.desired_joints_position.FL.reshape(-1) - joints_pos.FL) - self.Kd*(joints_vel.FL)
+-        action[self.env.legs_tau_idx.FR] = self.Kp*(self.desired_joints_position.FR.reshape(-1) - joints_pos.FR) - self.Kd*(joints_vel.FR)
+-        action[self.env.legs_tau_idx.RL] = self.Kp*(self.desired_joints_position.RL.reshape(-1) - joints_pos.RL) - self.Kd*(joints_vel.RL)
+-        action[self.env.legs_tau_idx.RR] = self.Kp*(self.desired_joints_position.RR.reshape(-1) - joints_pos.RR) - self.Kd*(joints_vel.RR)
+-        self.env.step(action=action)
+-
+-
+-        # Render only at a certain frequency -----------------------------------------------------------------
+-        if time.time() - self.last_render_time > 1.0 / RENDER_FREQ:
+-            self.env.render()
+-            self.last_render_time = time.time()
++            self.publisher_low_state = self.create_publisher(LowState,"/lowstate", 1)
+ 
++            self.subscriber_trajectory_generator = self.create_subscription(TrajectoryGenerator,"/trajectory_generator", self.get_trajectory_generator_callback, 1)
++
++            print("created publsihers")
++            createdpub= True
++            self.timer = self.create_timer(1.0/SCHEDULER_FREQ, self.compute_simulator_step_callback)
++
++            # Timing stuff
++            self.loop_time = 0.002
++            self.last_start_time = None
++            self.last_mpc_loop_time = 0.0
++
++
++            # Mujoco env
++            self.env = QuadrupedEnv(
++                robot=cfg.robot,
++                scene=cfg.scene,
++                sim_dt=1.0/SCHEDULER_FREQ,
++                base_vel_command_type="human"
++            )
++            self.env.reset(random=False)
++            
++
++            self.last_render_time = time.time()
++            self.env.render()  
++            self.env.viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = False
++            self.env.viewer.user_scn.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = False
++
++            # Desired PD 
++            self.desired_joints_position = LegsAttr(*[np.zeros((int(self.env.mjModel.nu/4), 1)) for _ in range(4)])
++            self.desired_joints_velocity = LegsAttr(*[np.zeros((int(self.env.mjModel.nu/4), 1)) for _ in range(4)])
++
++            # Desired gains
++            self.Kp = 0
++            self.Kd = 0
++
++
++        def get_trajectory_generator_callback(self, msg):
+ 
+-def main():
+-    print('Hello from the SimulatorROS2 node.')
+-    rclpy.init()
++            joints_position = np.array(msg.joints_position)
++
++            self.desired_joints_position.FL = joints_position[0:3]
++            self.desired_joints_position.FR = joints_position[3:6]
++            self.desired_joints_position.RL = joints_position[6:9]
++            self.desired_joints_position.RR = joints_position[9:12]
++
++            self.Kp = np.array(msg.kp)[0]
++            self.Kd = np.array(msg.kd)[0]
++            
++
++        def compute_simulator_step_callback(self):
++
++            qpos, qvel = self.env.mjData.qpos, self.env.mjData.qvel
++            base_lin_vel = self.env.base_lin_vel(frame='world')
++            base_ang_vel = self.env.base_ang_vel(frame='base')
++            base_pos = self.env.base_pos
++
++            # Publish Base State ------------------------------------------------
++            base_state_msg = BaseState()
++            base_state_msg.pose.position = base_pos
++            base_state_msg.pose.orientation = np.roll(self.env.mjData.qpos[3:7],-1)
++            base_state_msg.velocity.linear = base_lin_vel
++            base_state_msg.velocity.angular = base_ang_vel
++            self.publisher_base_state.publish(base_state_msg)
++
++
++            # Publish Blind State ------------------------------------------------
++            blind_state_msg = BlindState()
++            blind_state_msg.joints_position = self.env.mjData.qpos[7:].tolist()
++            blind_state_msg.joints_velocity = self.env.mjData.qvel[6:].tolist()
++            self.publisher_blind_state.publish(blind_state_msg)
++
++
++            # Publish IMU ------------------------------------------------
++            imu_msg = Imu()
++            imu_msg.linear_acceleration = self.env.mjData.sensordata[0:3]
++            imu_msg.angular_velocity = self.env.mjData.sensordata[3:6]
++            # To be compliant with our hal, we expect the xyzw order, 
++            # but mujoco gives us wxyz, so we roll the array to get the correct order
++            imu_msg.orientation = np.roll(np.array(self.env.mjData.sensordata[9:13]), -1) 
++            self.publisher_imu.publish(imu_msg)
++
++
++            # Publish Low State of Unitree ------------------------------------------------
++            # FR, FL, RR, RL convention to follow the unitree standard msgs
++            lowstate_msg = LowState()
++            for i in range(3):
++                lowstate_msg.motor_state[i].q = self.env.mjData.qpos[self.env.legs_qpos_idx.FR[i]]
++                lowstate_msg.motor_state[i].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.FR[i]]
++            for i in range(3):
++                lowstate_msg.motor_state[i+3].q = self.env.mjData.qpos[self.env.legs_qpos_idx.FL[i]]
++                lowstate_msg.motor_state[i+3].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.FL[i]]
++            for i in range(3):
++                lowstate_msg.motor_state[i+6].q = self.env.mjData.qpos[self.env.legs_qpos_idx.RR[i]]
++                lowstate_msg.motor_state[i+6].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.RR[i]]
++            for i in range(3):
++                lowstate_msg.motor_state[i+9].q = self.env.mjData.qpos[self.env.legs_qpos_idx.RL[i]]
++                lowstate_msg.motor_state[i+9].dq = self.env.mjData.qvel[self.env.legs_qvel_idx.RL[i]]
++
++            _, _, feet_GRF = self.env.feet_contact_state(ground_reaction_forces=True)
++            lowstate_msg.foot_force = np.array([feet_GRF.FR[2], feet_GRF.FL[2], feet_GRF.RR[2], feet_GRF.RL[2]], dtype=np.int16)
++            lowstate_msg.imu_state.accelerometer = self.env.mjData.sensordata[0:3].astype(np.float32)
++            lowstate_msg.imu_state.gyroscope = self.env.mjData.sensordata[3:6].astype(np.float32)
++            lowstate_msg.imu_state.quaternion = np.roll(np.array(self.env.mjData.sensordata[9:13].astype(np.float32)), -1)  
++            self.publisher_low_state.publish(lowstate_msg)
++
++
++            # Step the environment --------------------------------------------------------------------------------
++            joints_pos = LegsAttr(*[np.zeros((1, int(self.env.mjModel.nu/4))) for _ in range(4)])
++            joints_pos.FL = qpos[self.env.legs_qpos_idx.FL]
++            joints_pos.FR = qpos[self.env.legs_qpos_idx.FR]
++            joints_pos.RL = qpos[self.env.legs_qpos_idx.RL]
++            joints_pos.RR = qpos[self.env.legs_qpos_idx.RR]
++
++
++            joints_vel = LegsAttr(*[np.zeros((1, int(self.env.mjModel.nu/4))) for _ in range(4)])
++            joints_vel.FL = qvel[self.env.legs_qvel_idx.FL]
++            joints_vel.FR = qvel[self.env.legs_qvel_idx.FR]
++            joints_vel.RL = qvel[self.env.legs_qvel_idx.RL]
++            joints_vel.RR = qvel[self.env.legs_qvel_idx.RR]
++
++
++            action = np.zeros(self.env.mjModel.nu)
++            action[self.env.legs_tau_idx.FL] = self.Kp*(self.desired_joints_position.FL.reshape(-1) - joints_pos.FL) - self.Kd*(joints_vel.FL)
++            action[self.env.legs_tau_idx.FR] = self.Kp*(self.desired_joints_position.FR.reshape(-1) - joints_pos.FR) - self.Kd*(joints_vel.FR)
++            action[self.env.legs_tau_idx.RL] = self.Kp*(self.desired_joints_position.RL.reshape(-1) - joints_pos.RL) - self.Kd*(joints_vel.RL)
++            action[self.env.legs_tau_idx.RR] = self.Kp*(self.desired_joints_position.RR.reshape(-1) - joints_pos.RR) - self.Kd*(joints_vel.RR)
++            self.env.step(action=action)
+ 
+-    simulator_ros2_node = SimulatorROS2()
+ 
+-    rclpy.spin(simulator_ros2_node)
+-    simulator_ros2_node.destroy_node()
+-    rclpy.shutdown()
++            # Render only at a certain frequency -----------------------------------------------------------------
++            if time.time() - self.last_render_time > 1.0 / RENDER_FREQ:
++                self.env.render()
++                self.last_render_time = time.time()
+ 
+ 
+-if __name__ == '__main__':
+-    main()
++    def main():
++        print('Hello from the SimulatorROS2 node.')
++
++        if createdpub:
++            print("yes")
++        else:
++            print("no")
++        rclpy.init()
++
++        simulator_ros2_node = SimulatorROS2()
++
++        rclpy.spin(simulator_ros2_node)
++        simulator_ros2_node.destroy_node()
++        rclpy.shutdown()
++
++
++    if __name__ == '__main__':
++        main()
++except FileNotFoundError as e:
++    print(Path(e.filename).resolve())
+diff --git a/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/aliengo_asset.py b/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/aliengo_asset.py
+index 7da3f00..0ca25c1 100644
+--- a/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/aliengo_asset.py
++++ b/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/aliengo_asset.py
+@@ -66,9 +66,9 @@ ALIENGO_THIGH_ACTUATOR_CFG = IdentifiedActuatorElectricCfg(
+ 
+ ALIENGO_CALF_ACTUATOR_CFG = IdentifiedActuatorElectricCfg(
+     joint_names_expr=[".*_calf_joint"],
+-    effort_limit=44.4,
++    effort_limit={"RL_calf_joint":22.0, "FL_calf_joint":22.0, "FR_calf_joint":22.0, "RR_calf_joint":10.0},
+     velocity_limit=21.0,
+-    saturation_effort=44.4,
++    saturation_effort=22,
+     stiffness=stiffness_mujoco,
+     damping=damping_mujoco,
+     armature=armature_mujoco,
+diff --git a/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset.py b/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset.py
+index c42fc7e..7e0179b 100644
+--- a/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset.py
++++ b/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset.py
+@@ -36,7 +36,7 @@ GO2_HIP_ACTUATOR_CFG = PaceDCMotorCfg(
+ GO2_THIGH_ACTUATOR_CFG = PaceDCMotorCfg(
+     joint_names_expr=[".*_thigh_joint"],
+     saturation_effort=23.7,
+-    effort_limit=23.7,
++    effort_limit=0,
+     velocity_limit=30.1,
+     stiffness={".*": 20.0},  # P gain in Nm/rad
+     damping={".*": 1.5},  # D gain in Nm s/rad
+diff --git a/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/tasks/locomotion/aliengo_env_cfg.py b/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/tasks/locomotion/aliengo_env_cfg.py
+index b188480..fa78e9d 100644
+--- a/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/tasks/locomotion/aliengo_env_cfg.py
++++ b/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/tasks/locomotion/aliengo_env_cfg.py
+@@ -147,7 +147,7 @@ class AliengoFlatEnvCfg(DirectRLEnvCfg):
+ 
+     use_clock_signal = True
+     if(use_clock_signal):
+-        observation_space += 4 # clock signal for periodic gait
++        observation_space += 4 # clock signcal for periodic gait
+ 
+     single_observation_space = observation_space # Usefull for concatenating history
+ 
+@@ -159,7 +159,7 @@ class AliengoFlatEnvCfg(DirectRLEnvCfg):
+     else:
+         history_length = 1
+ 
+-    use_imu = False
++    use_imu = True
+     # an imu sensor in case we don't want any state estimator (for now we can't use sites from the xml)
+     imu = ImuCfg(
+         prim_path="/World/envs/env_.*/Robot/base", 
+@@ -169,7 +169,7 @@ class AliengoFlatEnvCfg(DirectRLEnvCfg):
+         debug_vis=False)
+ 
+     
+-    use_concurrent_state_est = False
++    use_concurrent_state_est = True
+     if(use_concurrent_state_est):
+         concurrent_state_est_network_type = "tcn" # "mlp" or "tcn"
+         
+diff --git a/tested_policies/go2/concurrent_symm/events.out.tfevents.1784060823.gturrisi.1374477.0 b/tested_policies/go2/concurrent_symm/events.out.tfevents.1784060823.gturrisi.1374477.0
+deleted file mode 100644
+index 808f33a..0000000
+Binary files a/tested_policies/go2/concurrent_symm/events.out.tfevents.1784060823.gturrisi.1374477.0 and /dev/null differ
+diff --git a/tested_policies/go2/concurrent_symm/exported/concurrent_state_estimator.pth b/tested_policies/go2/concurrent_symm/exported/concurrent_state_estimator.pth
+deleted file mode 100644
+index bd7388c..0000000
+Binary files a/tested_policies/go2/concurrent_symm/exported/concurrent_state_estimator.pth and /dev/null differ
+diff --git a/tested_policies/go2/concurrent_symm/exported/policy.onnx b/tested_policies/go2/concurrent_symm/exported/policy.onnx
+index 35a3403..b430e8d 100644
+Binary files a/tested_policies/go2/concurrent_symm/exported/policy.onnx and b/tested_policies/go2/concurrent_symm/exported/policy.onnx differ
+diff --git a/tested_policies/go2/concurrent_symm/exported/policy.pt b/tested_policies/go2/concurrent_symm/exported/policy.pt
+index 6f06b1d..f884d85 100644
+Binary files a/tested_policies/go2/concurrent_symm/exported/policy.pt and b/tested_policies/go2/concurrent_symm/exported/policy.pt differ
+diff --git a/tested_policies/go2/concurrent_symm/model_7950.pt b/tested_policies/go2/concurrent_symm/model_7950.pt
+deleted file mode 100644
+index 073cb20..0000000
+Binary files a/tested_policies/go2/concurrent_symm/model_7950.pt and /dev/null differ
+diff --git a/tested_policies/go2/concurrent_symm/model_7999.pt b/tested_policies/go2/concurrent_symm/model_7999.pt
+deleted file mode 100644
+index 9d2cc85..0000000
+Binary files a/tested_policies/go2/concurrent_symm/model_7999.pt and /dev/null differ
+diff --git a/tested_policies/go2/concurrent_symm/params/agent.yaml b/tested_policies/go2/concurrent_symm/params/agent.yaml
+index fea9a21..b92eed0 100644
+--- a/tested_policies/go2/concurrent_symm/params/agent.yaml
++++ b/tested_policies/go2/concurrent_symm/params/agent.yaml
+@@ -1,12 +1,12 @@
+ seed: 42
+ device: cuda:0
+ num_steps_per_env: 24
+-max_iterations: 8000
++max_iterations: 1000
+ empirical_normalization: false
+ obs_groups: {}
+ clip_actions: null
+ save_interval: 50
+-experiment_name: rough_direct
++experiment_name: flat_direct
+ run_name: ''
+ logger: wandb
+ neptune_project: basic-locomotion
+@@ -32,7 +32,7 @@ policy:
+   - 128
+   activation: elu
+ algorithm:
+-  class_name: PPOSymmDataAugmented
++  class_name: PPO
+   num_learning_epochs: 5
+   num_mini_batches: 4
+   learning_rate: 0.001
+@@ -48,22 +48,32 @@ algorithm:
+   normalize_advantage_per_mini_batch: false
+   rnd_cfg: null
+   symmetry_cfg: null
+-amp_data_path: ./../../../../../../scripts/amp_rl/amp_dataset/
+-dataset_names:
+-- flat
+-- boxes
+-- stairs
+-dataset_weights:
+-- 1.0
+-- 1.0
+-- 1.0
+-- 1.0
+-slow_down_factor: 1.0
++dataset:
++  amp_data_path: /home/yazn/basiclocomotionisaac/basic-locomotion-isaaclab/scripts/amp_rl/amp_dataset
++  datasets:
++    flat: 1.0
++    boxes: 1.0
++    stairs: 1.0
++  slow_down_factor: 1.0
++  amp_joint_names:
++  - FL_hip_joint
++  - FR_hip_joint
++  - RL_hip_joint
++  - RR_hip_joint
++  - FL_thigh_joint
++  - FR_thigh_joint
++  - RL_thigh_joint
++  - RR_thigh_joint
++  - FL_calf_joint
++  - FR_calf_joint
++  - RL_calf_joint
++  - RR_calf_joint
++  velocity_representation: body_fixed
+ discriminator:
+   class_name: Discriminator
+   hidden_dims:
+-  - 1024
+   - 512
++  - 256
+   reward_scale: 1.0
+   loss_type: BCEWithLogits
+   empirical_normalization: false
+@@ -73,92 +83,107 @@ morphologycal_symmetries_cfg:
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   obs_space_names_critic:
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
+   - clock_data
+   - base_lin_vel
+   - base_ang_vel
+   - gravity
+-  - ctrl_commands
+-  - qpos_js
+-  - qvel_js
+-  - actions
++  - des_base_lin_vel_xy
++  - des_base_ang_vel_yaw
++  - joints_pos
++  - joints_vel
++  - joints_pos
++  - clock_data
++  - clock_data
++  - clock_data
++  - clock_data
++  - clock_data
++  - clock_data
+   - clock_data
+-  - position_gains
+-  - velocity_gains
+   - base_lin_vel
+-  - base_pos_z
+-  - base_pos_z
++  - invariant_scalar
++  - invariant_scalar
+   - clock_data
++  - heightmap:4x4
+   action_space_names:
+-  - actions
++  - joints_pos
+   joints_order:
+   - FL_hip_joint
+   - FR_hip_joint
+diff --git a/tested_policies/go2/concurrent_symm/params/env.yaml b/tested_policies/go2/concurrent_symm/params/env.yaml
+index c580ce1..66217d5 100644
+--- a/tested_policies/go2/concurrent_symm/params/env.yaml
++++ b/tested_policies/go2/concurrent_symm/params/env.yaml
+@@ -85,7 +85,7 @@ decimation: 4
+ is_finite_horizon: false
+ episode_length_s: 20.0
+ scene:
+-  num_envs: 8196
++  num_envs: 4096
+   env_spacing: 4.0
+   lazy_sensor_update: true
+   replicate_physics: true
+@@ -342,17 +342,49 @@ events:
+         - null
+         preserve_order: false
+       stiffness_distribution_params: !!python/tuple
+-      - -2.0
+-      - 2.0
++      - 0.8
++      - 1.2
+       damping_distribution_params: !!python/tuple
+-      - -0.5
+-      - 0.5
+-      operation: add
++      - 0.8
++      - 1.2
++      operation: scale
+       distribution: uniform
+     mode: reset
+     interval_range_s: null
+     is_global_time: false
+     min_step_count_between_reset: 0
++  randomize_pace_actuator_delay:
++    func: basic_locomotion_isaaclab.tasks.custom_events:randomize_pace_actuator_delay
++    params:
++      asset_cfg:
++        name: robot
++        joint_names:
++        - .*
++        joint_ids: !!python/object/apply:builtins.slice
++        - null
++        - null
++        - null
++        fixed_tendon_names: null
++        fixed_tendon_ids: !!python/object/apply:builtins.slice
++        - null
++        - null
++        - null
++        body_names: null
++        body_ids: !!python/object/apply:builtins.slice
++        - null
++        - null
++        - null
++        object_collection_names: null
++        object_collection_ids: !!python/object/apply:builtins.slice
++        - null
++        - null
++        - null
++        preserve_order: false
++      min_delay: 0
++    mode: reset
++    interval_range_s: null
++    is_global_time: false
++    min_step_count_between_reset: 0
+   push_robot:
+     func: isaaclab.envs.mdp.events:push_by_setting_velocity
+     params:
+@@ -383,7 +415,7 @@ events:
+     min_step_count_between_reset: 0
+ observation_space: 260
+ num_observations: null
+-state_space: 293
++state_space: 309
+ num_states: null
+ observation_noise_model:
+   class_type: isaaclab.utils.noise.noise_model:NoiseModelWithAdditiveBias
+@@ -419,7 +451,7 @@ rerender_on_reset: false
+ num_rerenders_on_reset: 0
+ wait_for_textures: true
+ xr: null
+-log_dir: /home/gturrisi/isaaclab_ws_home/basic-locomotion-isaaclab/logs/rsl_rl/rough_direct/2026-07-14_22-26-48
++log_dir: /home/yazn/basiclocomotionisaac/basic-locomotion-isaaclab/logs/rsl_rl/flat_direct/2026-09-01_17-08-59
+ robot:
+   class_type: isaaclab.assets.articulation.articulation:Articulation
+   prim_path: /World/envs/env_.*/Robot
+@@ -462,7 +494,7 @@ robot:
+     joint_drive_props: null
+     visual_material_path: material
+     visual_material: null
+-    usd_path: /home/gturrisi/isaaclab_ws_home/basic-locomotion-isaaclab/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset/go2.usd
++    usd_path: /home/yazn/basiclocomotionisaac/basic-locomotion-isaaclab/source/basic_locomotion_isaaclab/basic_locomotion_isaaclab/assets/go2_asset/go2.usd
+     variants: null
+   init_state:
+     pos: !!python/tuple
+@@ -532,12 +564,16 @@ robot:
+         FR_hip_joint: 0.0
+         RL_hip_joint: 0.0
+         RR_hip_joint: 0.0
+-      max_delay: 1
++      max_delay: 2
+     thigh:
+       class_type: basic_locomotion_isaaclab.actuators.pace_actuator:PaceDCMotor
+       joint_names_expr:
+       - .*_thigh_joint
+-      effort_limit: 23.7
++      effort_limit:
++        FL_thigh_joint: 23.7
++        FR_thigh_joint: 23.7
++        RL_thigh_joint: 23.7
++        RR_thigh_joint: 13.7
+       velocity_limit: 30.1
+       effort_limit_sim: null
+       velocity_limit_sim: null
+@@ -571,7 +607,7 @@ robot:
+         FR_thigh_joint: 0.0
+         RL_thigh_joint: 0.0
+         RR_thigh_joint: 0.0
+-      max_delay: 1
++      max_delay: 2
+     calf:
+       class_type: basic_locomotion_isaaclab.actuators.pace_actuator:PaceDCMotor
+       joint_names_expr:
+@@ -610,7 +646,7 @@ robot:
+         FR_calf_joint: 0.0
+         RL_calf_joint: 0.0
+         RR_calf_joint: 0.0
+-      max_delay: 1
++      max_delay: 2
+   actuator_value_resolution_debug_print: false
+ contact_sensor:
+   class_type: isaaclab.sensors.contact_sensor.contact_sensor:ContactSensor
+@@ -680,185 +716,74 @@ contact_sensor:
+         physics_material_path: material
+         physics_material: null
+         radius: 0.02
++terrain_curriculum_move_up_error_percent: 20.0
++terrain_curriculum_move_down_error_percent: 50.0
+ action_scale: 0.5
+ use_clock_signal: true
+ single_observation_space: 52
+ use_observation_history: true
+ history_length: 5
+ use_imu: false
+-use_concurrent_state_est: true
+-concurrent_state_est_network_type: tcn
+-concurrent_state_est_output_space: 3
+-single_concurrent_state_est_observation_space: 48
+-concurrent_state_est_history_length: 5
+-concurrent_state_est_observation_space: 240
+-concurrent_state_est_batch_size: 512
+-concurrent_state_est_train_epochs: 1000
+-concurrent_state_est_lr: 0.001
+-concurrent_state_est_ep_saving_interval: 1000
+-concurrent_state_est_ep_saving_start: 6000
+-use_rma: false
+-use_asymmetric_ppo: true
+-use_amp: false
+-terrain:
+-  class_type: isaaclab.terrains.terrain_importer:TerrainImporter
+-  collision_group: -1
+-  prim_path: /World/ground
+-  num_envs: 8196
+-  terrain_type: generator
+-  terrain_generator:
+-    class_type: isaaclab.terrains.terrain_generator:TerrainGenerator
+-    seed: null
+-    curriculum: false
+-    size: !!python/tuple
+-    - 8.0
+-    - 8.0
+-    border_width: 20.0
+-    border_height: 1.0
+-    num_rows: 10
+-    num_cols: 20
+-    color_scheme: none
+-    horizontal_scale: 0.1
+-    vertical_scale: 0.005
+-    slope_threshold: 0.75
+-    sub_terrains:
+-      flat:
+-        function: isaaclab.terrains.trimesh.mesh_terrains:flat_terrain
+-        proportion: 0.2
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-      boxes:
+-        function: isaaclab.terrains.trimesh.mesh_terrains:random_grid_terrain
+-        proportion: 0.1
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-        grid_width: 0.45
+-        grid_height_range: !!python/tuple
+-        - 0.05
+-        - 0.1
+-        platform_width: 2.0
+-        holes: false
+-      star:
+-        function: isaaclab.terrains.trimesh.mesh_terrains:star_terrain
+-        proportion: 0.1
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-        num_bars: 10
+-        bar_width_range: !!python/tuple
+-        - 0.15
+-        - 0.2
+-        bar_height_range: !!python/tuple
+-        - 0.05
+-        - 0.13
+-        platform_width: 2.0
+-      random_rough:
+-        function: isaaclab.terrains.height_field.hf_terrains:random_uniform_terrain
+-        proportion: 0.1
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-        border_width: 0.25
+-        horizontal_scale: 0.1
+-        vertical_scale: 0.005
+-        slope_threshold: 0.75
+-        noise_range: !!python/tuple
+-        - 0.02
+-        - 0.06
+-        noise_step: 0.02
+-        downsampled_scale: null
+-      hf_pyramid_slope:
+-        function: isaaclab.terrains.height_field.hf_terrains:pyramid_sloped_terrain
+-        proportion: 0.1
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-        border_width: 0.25
+-        horizontal_scale: 0.1
+-        vertical_scale: 0.005
+-        slope_threshold: 0.75
+-        slope_range: !!python/tuple
+-        - 0.2
+-        - 0.4
+-        platform_width: 2.0
+-        inverted: false
+-      hf_pyramid_slope_inv:
+-        function: isaaclab.terrains.height_field.hf_terrains:pyramid_sloped_terrain
+-        proportion: 0.1
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-        border_width: 0.25
+-        horizontal_scale: 0.1
+-        vertical_scale: 0.005
+-        slope_threshold: 0.75
+-        slope_range: !!python/tuple
+-        - 0.2
+-        - 0.4
+-        platform_width: 2.0
+-        inverted: true
+-      pyramid_stairs:
+-        function: isaaclab.terrains.trimesh.mesh_terrains:pyramid_stairs_terrain
+-        proportion: 0.15
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-        border_width: 1.0
+-        step_height_range: !!python/tuple
+-        - 0.05
+-        - 0.13
+-        step_width: 0.3
+-        platform_width: 3.0
+-        holes: false
+-      pyramid_stairs_inv:
+-        function: isaaclab.terrains.trimesh.mesh_terrains:inverted_pyramid_stairs_terrain
+-        proportion: 0.15
+-        size: !!python/tuple
+-        - 8.0
+-        - 8.0
+-        flat_patch_sampling: null
+-        border_width: 1.0
+-        step_height_range: !!python/tuple
+-        - 0.05
+-        - 0.13
+-        step_width: 0.3
+-        platform_width: 3.0
+-        holes: false
+-    difficulty_range: !!python/tuple
+-    - 0.0
+-    - 1.0
+-    use_cache: false
+-    cache_dir: /tmp/isaaclab/terrains
+-  usd_path: null
+-  env_spacing: 4.0
+-  use_terrain_origins: true
+-  visual_material:
+-    func: isaaclab.sim.spawners.materials.visual_materials:spawn_from_mdl_file
+-    mdl_path: '{NVIDIA_NUCLEUS_DIR}/Materials/Base/Architecture/Shingles_01.mdl'
+-    project_uvw: true
+-    albedo_brightness: null
+-    texture_scale: null
+-  physics_material:
+-    func: isaaclab.sim.spawners.materials.physics_materials:spawn_rigid_body_material
+-    static_friction: 1.0
+-    dynamic_friction: 1.0
+-    restitution: 0.0
+-    friction_combine_mode: multiply
+-    restitution_combine_mode: multiply
+-    compliant_contact_stiffness: 0.0
+-    compliant_contact_damping: 0.0
+-  max_init_terrain_level: 10
++imu:
++  class_type: isaaclab.sensors.imu.imu:Imu
++  prim_path: /World/envs/env_.*/Robot/base
++  update_period: 0.0
++  history_length: 0
+   debug_vis: false
+-height_scanner:
++  offset:
++    pos: !!python/tuple
++    - -0.02557
++    - 0
++    - 0.04232
++    rot: !!python/tuple
++    - 1.0
++    - 0.0
++    - 0.0
++    - 0.0
++  visualizer_cfg:
++    prim_path: /Visuals/Command/velocity_goal
++    markers:
++      arrow:
++        func: isaaclab.sim.spawners.from_files.from_files:spawn_from_usd
++        visible: true
++        semantic_tags: null
++        copy_from_source: true
++        mass_props: null
++        deformable_props: null
++        rigid_props: null
++        collision_props: null
++        activate_contact_sensors: false
++        scale: !!python/tuple
++        - 1.0
++        - 0.1
++        - 0.1
++        articulation_props: null
++        fixed_tendons_props: null
++        spatial_tendons_props: null
++        joint_drive_props: null
++        visual_material_path: material
++        visual_material:
++          func: isaaclab.sim.spawners.materials.visual_materials:spawn_preview_surface
++          diffuse_color: !!python/tuple
++          - 1.0
++          - 0.0
++          - 0.0
++          emissive_color: !!python/tuple
++          - 0.0
++          - 0.0
++          - 0.0
++          roughness: 0.5
++          metallic: 0.0
++          opacity: 1.0
++        usd_path: https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/UIElements/arrow_x.usd
++        variants: null
++  gravity_bias: !!python/tuple
++  - 0.0
++  - 0.0
++  - 9.81
++use_concurrent_state_est: false
++use_rma: false
++pose_height_scanner:
+   class_type: isaaclab.sensors.ray_caster.ray_caster:RayCaster
+   prim_path: /World/envs/env_.*/Robot/base
+   update_period: 0.0
+@@ -932,43 +857,63 @@ height_scanner:
+         physics_material_path: material
+         physics_material: null
+         radius: 0.02
+-imu:
+-  class_type: isaaclab.sensors.imu.imu:Imu
+-  prim_path: /World/envs/env_.*/Robot/base
++foot_height_scanner:
++  class_type: isaaclab.sensors.ray_caster.ray_caster:RayCaster
++  prim_path: /World/envs/env_.*/Robot/FL_foot
+   update_period: 0.0
+   history_length: 0
+   debug_vis: false
++  mesh_prim_paths:
++  - /World/ground
+   offset:
+     pos: !!python/tuple
+-    - -0.02557
+-    - 0
+-    - 0.04232
++    - 0.0
++    - 0.0
++    - 0.5
+     rot: !!python/tuple
+     - 1.0
+     - 0.0
+     - 0.0
+     - 0.0
++  attach_yaw_only: null
++  ray_alignment: yaw
++  pattern_cfg:
++    func: isaaclab.sensors.ray_caster.patterns.patterns:grid_pattern
++    resolution: 0.05
++    size:
++    - 0.1
++    - 0.1
++    direction: !!python/tuple
++    - 0.0
++    - 0.0
++    - -1.0
++    ordering: xy
++  max_distance: 1000000.0
++  drift_range: !!python/tuple
++  - 0.0
++  - 0.0
++  ray_cast_drift_range:
++    x: !!python/tuple
++    - 0.0
++    - 0.0
++    y: !!python/tuple
++    - 0.0
++    - 0.0
++    z: !!python/tuple
++    - 0.0
++    - 0.0
+   visualizer_cfg:
+-    prim_path: /Visuals/Command/velocity_goal
++    prim_path: /Visuals/RayCaster
+     markers:
+-      arrow:
+-        func: isaaclab.sim.spawners.from_files.from_files:spawn_from_usd
++      hit:
++        func: isaaclab.sim.spawners.shapes.shapes:spawn_sphere
+         visible: true
+         semantic_tags: null
+         copy_from_source: true
+         mass_props: null
+-        deformable_props: null
+         rigid_props: null
+         collision_props: null
+         activate_contact_sensors: false
+-        scale: !!python/tuple
+-        - 1.0
+-        - 0.1
+-        - 0.1
+-        articulation_props: null
+-        fixed_tendons_props: null
+-        spatial_tendons_props: null
+-        joint_drive_props: null
+         visual_material_path: material
+         visual_material:
+           func: isaaclab.sim.spawners.materials.visual_materials:spawn_preview_surface
+@@ -983,12 +928,57 @@ imu:
+           roughness: 0.5
+           metallic: 0.0
+           opacity: 1.0
+-        usd_path: https://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/5.1/Isaac/Props/UIElements/arrow_x.usd
+-        variants: null
+-  gravity_bias: !!python/tuple
++        physics_material_path: material
++        physics_material: null
++        radius: 0.02
++use_asymmetric_ppo: true
++pattern_cfg:
++  func: isaaclab.sensors.ray_caster.patterns.patterns:grid_pattern
++  resolution: 0.2
++  size:
++  - 0.6
++  - 0.6
++  direction: !!python/tuple
+   - 0.0
+   - 0.0
+-  - 9.81
++  - -1.0
++  ordering: xy
++height_map_x_points: 4
++height_map_y_points: 4
++terrain:
++  class_type: isaaclab.terrains.terrain_importer:TerrainImporter
++  collision_group: -1
++  prim_path: /World/ground
++  num_envs: 4096
++  terrain_type: plane
++  terrain_generator: null
++  usd_path: null
++  env_spacing: 4.0
++  use_terrain_origins: true
++  visual_material:
++    func: isaaclab.sim.spawners.materials.visual_materials:spawn_preview_surface
++    diffuse_color: !!python/tuple
++    - 0.0
++    - 0.0
++    - 0.0
++    emissive_color: !!python/tuple
++    - 0.0
++    - 0.0
++    - 0.0
++    roughness: 0.5
++    metallic: 0.0
++    opacity: 1.0
++  physics_material:
++    func: isaaclab.sim.spawners.materials.physics_materials:spawn_rigid_body_material
++    static_friction: 1.0
++    dynamic_friction: 1.0
++    restitution: 0.0
++    friction_combine_mode: multiply
++    restitution_combine_mode: multiply
++    compliant_contact_stiffness: 0.0
++    compliant_contact_damping: 0.0
++  max_init_terrain_level: null
++  debug_vis: false
+ desired_joints_order:
+ - FL_hip_joint
+ - FR_hip_joint
+@@ -1002,8 +992,9 @@ desired_joints_order:
+ - FR_calf_joint
+ - RL_calf_joint
+ - RR_calf_joint
++use_amp: false
+ desired_base_height: 0.3
+-desired_feet_height: 0.05
++desired_feet_height: 0.08
+ desired_clip_actions: 3.0
+ use_filter_actions: true
+ lin_vel_reward_scale: 2.0
+@@ -1021,13 +1012,13 @@ joints_calf_position_reward_scale: -0.0
+ undersired_contact_reward_scale: -1.0
+ action_rate_reward_scale: -0.01
+ action_smoothness_reward_scale: -0.001
+-feet_air_time_reward_scale: 0.0
+-feet_air_time_variance_reward_scale: 0.0
++feet_air_time_reward_scale: 0.25
++feet_air_time_variance_reward_scale: -0.0
+ feet_height_clearance_aperiodic_reward_scale: 0.0
+-feet_height_clearance_periodic_reward_scale: 0.25
++feet_height_clearance_periodic_reward_scale: 0.0
+ feet_height_clearance_mujoco_aperiodic_reward_scale: 0.0
+-feet_height_clearance_mujoco_periodic_reward_scale: 0.0
+-feet_slide_reward_scale: 0.0
++feet_height_clearance_mujoco_periodic_reward_scale: 0.25
++feet_slide_reward_scale: -0.0
+ feet_to_hip_distance_reward_scale: 1.5
+ desired_hip_offset: 0.095
+ feet_edge_reward_scale: 0.0
+@@ -1044,136 +1035,4 @@ desired_phase_offset:
+ - 0.5
+ - 0.5
+ - 0.0
+-stance_contact_suggestion_reward_scale: 0.5
+-ROUGH_TERRAINS_CFG:
+-  class_type: isaaclab.terrains.terrain_generator:TerrainGenerator
+-  seed: null
+-  curriculum: false
+-  size: !!python/tuple
+-  - 8.0
+-  - 8.0
+-  border_width: 20.0
+-  border_height: 1.0
+-  num_rows: 10
+-  num_cols: 20
+-  color_scheme: none
+-  horizontal_scale: 0.1
+-  vertical_scale: 0.005
+-  slope_threshold: 0.75
+-  sub_terrains:
+-    flat:
+-      function: isaaclab.terrains.trimesh.mesh_terrains:flat_terrain
+-      proportion: 0.2
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-    boxes:
+-      function: isaaclab.terrains.trimesh.mesh_terrains:random_grid_terrain
+-      proportion: 0.1
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-      grid_width: 0.45
+-      grid_height_range: !!python/tuple
+-      - 0.05
+-      - 0.1
+-      platform_width: 2.0
+-      holes: false
+-    star:
+-      function: isaaclab.terrains.trimesh.mesh_terrains:star_terrain
+-      proportion: 0.1
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-      num_bars: 10
+-      bar_width_range: !!python/tuple
+-      - 0.15
+-      - 0.2
+-      bar_height_range: !!python/tuple
+-      - 0.05
+-      - 0.13
+-      platform_width: 2.0
+-    random_rough:
+-      function: isaaclab.terrains.height_field.hf_terrains:random_uniform_terrain
+-      proportion: 0.1
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-      border_width: 0.25
+-      horizontal_scale: 0.1
+-      vertical_scale: 0.005
+-      slope_threshold: null
+-      noise_range: !!python/tuple
+-      - 0.02
+-      - 0.06
+-      noise_step: 0.02
+-      downsampled_scale: null
+-    hf_pyramid_slope:
+-      function: isaaclab.terrains.height_field.hf_terrains:pyramid_sloped_terrain
+-      proportion: 0.1
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-      border_width: 0.25
+-      horizontal_scale: 0.1
+-      vertical_scale: 0.005
+-      slope_threshold: null
+-      slope_range: !!python/tuple
+-      - 0.2
+-      - 0.4
+-      platform_width: 2.0
+-      inverted: false
+-    hf_pyramid_slope_inv:
+-      function: isaaclab.terrains.height_field.hf_terrains:pyramid_sloped_terrain
+-      proportion: 0.1
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-      border_width: 0.25
+-      horizontal_scale: 0.1
+-      vertical_scale: 0.005
+-      slope_threshold: null
+-      slope_range: !!python/tuple
+-      - 0.2
+-      - 0.4
+-      platform_width: 2.0
+-      inverted: true
+-    pyramid_stairs:
+-      function: isaaclab.terrains.trimesh.mesh_terrains:pyramid_stairs_terrain
+-      proportion: 0.15
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-      border_width: 1.0
+-      step_height_range: !!python/tuple
+-      - 0.05
+-      - 0.13
+-      step_width: 0.3
+-      platform_width: 3.0
+-      holes: false
+-    pyramid_stairs_inv:
+-      function: isaaclab.terrains.trimesh.mesh_terrains:inverted_pyramid_stairs_terrain
+-      proportion: 0.15
+-      size: !!python/tuple
+-      - 10.0
+-      - 10.0
+-      flat_patch_sampling: null
+-      border_width: 1.0
+-      step_height_range: !!python/tuple
+-      - 0.05
+-      - 0.13
+-      step_width: 0.3
+-      platform_width: 3.0
+-      holes: false
+-  difficulty_range: !!python/tuple
+-  - 0.0
+-  - 1.0
+-  use_cache: false
+-  cache_dir: /tmp/isaaclab/terrains
++stance_contact_suggestion_reward_scale: 1.0

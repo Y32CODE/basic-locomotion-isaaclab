@@ -203,7 +203,7 @@ class AliengoFlatEnvCfg(DirectRLEnvCfg):
         debug_vis=False)
 
     
-    use_concurrent_state_est = False
+    use_concurrent_state_est = True
     if(use_concurrent_state_est):
         concurrent_state_est_network_type = "tcn" # "mlp" or "tcn"
         
@@ -511,7 +511,7 @@ class AliengoRoughVisionEnvCfg(AliengoRoughBlindEnvCfg):
 
         self.feet_edge_reward_scale = -1.0
 
-    use_vision = True
+    use_vision = False
 
     # we add a height scanner for perceptive locomotion
     perceptive_height_scanner = RayCasterCfg(

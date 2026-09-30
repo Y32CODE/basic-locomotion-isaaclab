@@ -86,7 +86,7 @@ class SimulatorROS2(Node):
         self.publisher_blind_state = self.create_publisher(BlindState,"/blind_state_legged", 1)
         self.publisher_imu = self.create_publisher(Imu,"/imu", 1)
         self.publisher_low_state = self.create_publisher(LowState,"/lowstate", 1)
-        self.publisher_heightmap = self.create_publisher(MarkerArray,"/height_scan_markers", 1)
+        # self.publisher_heightmap = self.create_publisher(MarkerArray,"/height_scan_markers", 1)
 
         # Subscriber
         self.subscriber_control_signal = self.create_subscription(ControlSignal,"/control_signal_legged", self.get_control_signal_callback, 1)
@@ -113,10 +113,10 @@ class SimulatorROS2(Node):
         self.last_render_time = time.time()
         self.step_num = 0
 
-        resolution_heightmap = config.training_env["perceptive_height_scanner"]["pattern_cfg"]["resolution"]
-        num_rows_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][0]/resolution_heightmap) + 1
-        num_cols_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][1]/resolution_heightmap) + 1
-        self.heightmap = HeightMap(num_rows=num_rows_heightmap, num_cols=num_cols_heightmap, dist_x=resolution_heightmap, dist_y=resolution_heightmap, mj_model=self.mjModel, mj_data=self.mjData)
+        # resolution_heightmap = config.training_env["perceptive_height_scanner"]["pattern_cfg"]["resolution"]
+        # num_rows_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][0]/resolution_heightmap) + 1
+        # num_cols_heightmap = round(config.training_env["perceptive_height_scanner"]["pattern_cfg"]["size"][1]/resolution_heightmap) + 1
+        # self.heightmap = HeightMap(num_rows=num_rows_heightmap, num_cols=num_cols_heightmap, dist_x=resolution_heightmap, dist_y=resolution_heightmap, mj_model=self.mjModel, mj_data=self.mjData)
 
         # Desired PD
         self.desired_joints_position = np.zeros(12)
@@ -135,6 +135,7 @@ class SimulatorROS2(Node):
             mujoco.mj_id2name(self.mjModel, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
             for joint_id in range(1, self.mjModel.njnt)
         ]
+        print(self.joint_names)
 
 
     def get_control_signal_callback(self, msg):
@@ -153,42 +154,42 @@ class SimulatorROS2(Node):
         base_pos = mujoco_utils.base_pos(self.mjData)
 
         # Publish Height Map ------------------------------------------------
-        if self.step_num % round(SCHEDULER_FREQ/HEIGHTMAP_FREQ) == 0 and config.training_env["use_vision"]:
-            base_ori_euler_xyz = mujoco_utils.base_ori_euler_xyz(self.mjData)
-            heading_orientation_SO3 = mujoco_utils.heading_orientation_SO3(self.mjData)
-            offset_world_frame = config.training_env["perceptive_height_scanner"]["offset"]["pos"] @ heading_orientation_SO3.T
-            self.heightmap.update_height_map(self.mjData.qpos[0:3] + offset_world_frame, yaw=base_ori_euler_xyz[2])
+        # if self.step_num % round(SCHEDULER_FREQ/HEIGHTMAP_FREQ) == 0 and config.training_env["use_vision"]:
+        #     base_ori_euler_xyz = mujoco_utils.base_ori_euler_xyz(self.mjData)
+        #     heading_orientation_SO3 = mujoco_utils.heading_orientation_SO3(self.mjData)
+        #     offset_world_frame = config.training_env["perceptive_height_scanner"]["offset"]["pos"] @ heading_orientation_SO3.T
+        #     self.heightmap.update_height_map(self.mjData.qpos[0:3] + offset_world_frame, yaw=base_ori_euler_xyz[2])
 
-            rotation = np.empty(9, dtype=np.float64)
-            mujoco.mju_quat2Mat(rotation, self.mjData.qpos[3:7])
-            heightmap_local = (
-                (self.heightmap.data.reshape(-1, 3) - base_pos)
-                @ rotation.reshape(3, 3)
-            ).reshape(self.heightmap.num_rows, self.heightmap.num_cols, 3)
+        #     rotation = np.empty(9, dtype=np.float64)
+        #     mujoco.mju_quat2Mat(rotation, self.mjData.qpos[3:7])
+        #     heightmap_local = (
+        #         (self.heightmap.data.reshape(-1, 3) - base_pos)
+        #         @ rotation.reshape(3, 3)
+        #     ).reshape(self.heightmap.num_rows, self.heightmap.num_cols, 3)
 
-            # Inverse of the ordering conversion in ControllerROS2.get_heightmap_callback.
-            heightmap_publisher_order = np.flip(heightmap_local, axis=(0, 1)).transpose(1, 0, 2).reshape(-1, 3)
-            heightmap_msg = MarkerArray()
-            marker_stamp = self.get_clock().now().to_msg()
-            for marker_id, point in enumerate(heightmap_publisher_order):
-                marker = Marker()
-                marker.header.frame_id = "base_link"
-                marker.header.stamp = marker_stamp
-                marker.ns = "height_scan"
-                marker.id = marker_id
-                marker.type = Marker.SPHERE
-                marker.action = Marker.ADD
-                marker.pose.position.x = point[0]
-                marker.pose.position.y = point[1]
-                marker.pose.position.z = point[2]
-                marker.pose.orientation.w = 1.0
-                marker.scale.x = 0.02
-                marker.scale.y = 0.02
-                marker.scale.z = 0.02
-                marker.color.g = 1.0
-                marker.color.a = 0.5
-                heightmap_msg.markers.append(marker)
-            self.publisher_heightmap.publish(heightmap_msg)
+        #     # Inverse of the ordering conversion in ControllerROS2.get_heightmap_callback.
+        #     heightmap_publisher_order = np.flip(heightmap_local, axis=(0, 1)).transpose(1, 0, 2).reshape(-1, 3)
+        #     heightmap_msg = MarkerArray()
+        #     marker_stamp = self.get_clock().now().to_msg()
+        #     for marker_id, point in enumerate(heightmap_publisher_order):
+        #         marker = Marker()
+        #         marker.header.frame_id = "base_link"
+        #         marker.header.stamp = marker_stamp
+        #         marker.ns = "height_scan"
+        #         marker.id = marker_id
+        #         marker.type = Marker.SPHERE
+        #         marker.action = Marker.ADD
+        #         marker.pose.position.x = point[0]
+        #         marker.pose.position.y = point[1]
+        #         marker.pose.position.z = point[2]
+        #         marker.pose.orientation.w = 1.0
+        #         marker.scale.x = 0.02
+        #         marker.scale.y = 0.02
+        #         marker.scale.z = 0.02
+        #         marker.color.g = 1.0
+        #         marker.color.a = 0.5
+        #         heightmap_msg.markers.append(marker)
+        #     self.publisher_heightmap.publish(heightmap_msg)
 
         # Publish Base State ------------------------------------------------
         base_state_msg = BaseState()
@@ -273,16 +274,16 @@ class SimulatorROS2(Node):
         if time.time() - self.last_render_time > 1.0 / RENDER_FREQ:
             self.viewer.cam.lookat[:] = base_pos
 
-            if config.training_env["use_vision"] and self.heightmap.data is not None:
-                for i in range(self.heightmap.data.shape[0]):
-                    for j in range(self.heightmap.data.shape[1]):
-                        self.heightmap.geom_ids[i, j] = mujoco_utils.render_sphere(
-                            viewer=self.viewer,
-                            position=self.heightmap.data[i, j, 0],
-                            diameter=0.02,
-                            color=[0, 1, 0, 0.5],
-                            geom_id=self.heightmap.geom_ids[i, j],
-                        )
+            # if config.training_env["use_vision"] and self.heightmap.data is not None:
+            #     for i in range(self.heightmap.data.shape[0]):
+            #         for j in range(self.heightmap.data.shape[1]):
+            #             self.heightmap.geom_ids[i, j] = mujoco_utils.render_sphere(
+            #                 viewer=self.viewer,
+            #                 position=self.heightmap.data[i, j, 0],
+            #                 diameter=0.02,
+            #                 color=[0, 1, 0, 0.5],
+            #                 geom_id=self.heightmap.geom_ids[i, j],
+            #             )
 
 
             self.viewer.sync()
